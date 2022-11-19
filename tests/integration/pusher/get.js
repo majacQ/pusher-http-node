@@ -1,46 +1,150 @@
-var expect = require("expect.js");
+const expect = require("expect.js")
+const nock = require("nock")
 
-var Pusher = require("../../../lib/pusher");
+const Pusher = require("../../../lib/pusher")
 
-describe("Pusher (integration)", function() {
-  var pusher;
+describe("Pusher", function () {
+  let pusher
 
-  beforeEach(function() {
-    pusher = new Pusher.forURL(process.env.PUSHER_URL);
-  });
+  beforeEach(function () {
+    pusher = new Pusher({ appId: 999, key: "111111", secret: "tofu" })
+    nock.disableNetConnect()
+  })
 
-  describe("#get", function() {
-    describe("/channels", function() {
-      it("should return channels as an object", function(done) {
-        pusher.get({ path: "/channels" }, function(error, request, response) {
-          expect(error).to.be(null);
-          expect(response.statusCode).to.equal(200);
-          expect(JSON.parse(response.body).channels).to.be.an(Object);
-          done();
-        });
-      });
-    });
+  afterEach(function () {
+    nock.cleanAll()
+    nock.enableNetConnect()
+  })
 
-    describe("/channels/CHANNEL", function() {
-      it("should return if the channel is occupied", function(done) {
-        pusher.get({ path: "/channels/CHANNEL" }, function(error, request, response) {
-          expect(error).to.be(null);
-          expect(response.statusCode).to.equal(200);
-          expect(JSON.parse(response.body).occupied).to.be.a("boolean");
-          done();
-        });
-      });
-    });
+  describe("#get", function () {
+    it("should set the correct path and include all params", function (done) {
+      nock("http://api.pusherapp.com")
+        .filteringPath(function (path) {
+          return path
+            .replace(/auth_timestamp=[0-9]+/, "auth_timestamp=X")
+            .replace(/auth_signature=[0-9a-f]{64}/, "auth_signature=Y")
+        })
+        .get(
+          "/apps/999/channels?auth_key=111111&auth_timestamp=X&auth_version=1.0&filter_by_prefix=presence-&info=user_count,subscription_count&auth_signature=Y"
+        )
+        .reply(200, "{}")
 
-    describe("/channels/CHANNEL/users", function() {
-      it("should return code 400 for non-presence channels", function(done) {
-        pusher.get({ path: "/channels/CHANNEL/users" }, function(error, request, response) {
-          expect(error).to.be.a(Pusher.RequestError);
-          expect(error.message).to.equal("Unexpected status code 400");
-          expect(error.statusCode).to.equal(400);
-          done();
-        });
-      });
-    });
-  });
-});
+      pusher
+        .get({
+          path: "/channels",
+          params: {
+            filter_by_prefix: "presence-",
+            info: "user_count,subscription_count",
+          },
+        })
+        .then(() => done())
+        .catch(done)
+    })
+
+    it("should resolve to the response", function (done) {
+      nock("http://api.pusherapp.com")
+        .filteringPath(function (path) {
+          return path
+            .replace(/auth_timestamp=[0-9]+/, "auth_timestamp=X")
+            .replace(/auth_signature=[0-9a-f]{64}/, "auth_signature=Y")
+        })
+        .get(
+          "/apps/999/test?auth_key=111111&auth_timestamp=X&auth_version=1.0&auth_signature=Y"
+        )
+        .reply(200, '{"test key": "test value"}')
+
+      pusher
+        .get({ path: "/test", params: {} })
+        .then((response) => {
+          expect(response.status).to.equal(200)
+          return response.text().then((body) => {
+            expect(body).to.equal('{"test key": "test value"}')
+            done()
+          })
+        })
+        .catch(done)
+    })
+
+    it("should reject with a RequestError if Pusher responds with 4xx", function (done) {
+      nock("http://api.pusherapp.com")
+        .filteringPath(function (path) {
+          return path
+            .replace(/auth_timestamp=[0-9]+/, "auth_timestamp=X")
+            .replace(/auth_signature=[0-9a-f]{64}/, "auth_signature=Y")
+        })
+        .get(
+          "/apps/999/test?auth_key=111111&auth_timestamp=X&auth_version=1.0&auth_signature=Y"
+        )
+        .reply(400, "Error")
+
+      pusher.get({ path: "/test", params: {} }).catch((error) => {
+        expect(error).to.be.a(Pusher.RequestError)
+        expect(error.message).to.equal("Unexpected status code 400")
+        expect(error.url).to.match(
+          /^http:\/\/api.pusherapp.com\/apps\/999\/test\?auth_key=111111&auth_timestamp=[0-9]+&auth_version=1\.0&auth_signature=[a-f0-9]+$/
+        )
+        expect(error.status).to.equal(400)
+        expect(error.body).to.equal("Error")
+        done()
+      })
+    })
+
+    it("should respect the encryption, host and port config", function (done) {
+      const pusher = new Pusher({
+        appId: 999,
+        key: "111111",
+        secret: "tofu",
+        useTLS: true,
+        host: "example.com",
+        port: 1234,
+      })
+      nock("https://example.com:1234")
+        .filteringPath(function (path) {
+          return path
+            .replace(/auth_timestamp=[0-9]+/, "auth_timestamp=X")
+            .replace(/auth_signature=[0-9a-f]{64}/, "auth_signature=Y")
+        })
+        .get(
+          "/apps/999/test?auth_key=111111&auth_timestamp=X&auth_version=1.0&auth_signature=Y"
+        )
+        .reply(200, '{"test key": "test value"}')
+
+      pusher
+        .get({ path: "/test", params: {} })
+        .then(() => done())
+        .catch(done)
+    })
+
+    it("should respect the timeout when specified", function (done) {
+      const pusher = new Pusher({
+        appId: 999,
+        key: "111111",
+        secret: "tofu",
+        timeout: 100,
+      })
+      nock("http://api.pusherapp.com")
+        .filteringPath(function (path) {
+          return path
+            .replace(/auth_timestamp=[0-9]+/, "auth_timestamp=X")
+            .replace(/auth_signature=[0-9a-f]{64}/, "auth_signature=Y")
+        })
+        .get(
+          "/apps/999/test?auth_key=111111&auth_timestamp=X&auth_version=1.0&auth_signature=Y"
+        )
+        .delayConnection(101)
+        .reply(200)
+
+      pusher.get({ path: "/test", params: {} }).catch((error) => {
+        expect(error).to.be.a(Pusher.RequestError)
+        expect(error.message).to.equal("Request failed with an error")
+        expect(error.error.name).to.eql("AbortError")
+        expect(error.url).to.match(
+          /^http:\/\/api.pusherapp.com\/apps\/999\/test\?auth_key=111111&auth_timestamp=[0-9]+&auth_version=1\.0&auth_signature=[a-f0-9]+$/
+        )
+        expect(error.status).to.equal(undefined)
+        expect(error.body).to.equal(undefined)
+        done()
+      })
+    })
+  })
+})
